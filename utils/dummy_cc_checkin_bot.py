@@ -5,16 +5,9 @@ from textwrap import dedent
 
 from loguru import logger
 import tomli as tomllib
-from pyrogram import filters
-from pyrogram.handlers import MessageHandler, CallbackQueryHandler
-from pyrogram.types import (
-    Message,
-    BotCommand,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    CallbackQuery,
-)
-from pyrogram.enums import ParseMode
+from telethon import events, Button
+from telethon.tl.types import Message, User
+from telethon.tl.custom import InlineKeyboardMarkup
 
 from embykeeper.utils import AsyncTyper
 from embykeeper.telechecker.tele import Client, API_KEY
@@ -25,20 +18,18 @@ states = {}
 signed = {}
 
 main_photo = Path(__file__).parent / "data/cc/main.jpg"
-main_reply_markup = InlineKeyboardMarkup(
+main_reply_markup = InlineKeyboardMarkup([
+    [Button.inline("🕹️签到", data="checkin")],
     [
-        [InlineKeyboardButton(text="🕹️签到", callback_data="checkin")],
-        [
-            InlineKeyboardButton(text="🔱账号", callback_data="account"),
-            InlineKeyboardButton(text="🔖百宝箱", callback_data="redeem_menu"),
-        ],
-        [
-            InlineKeyboardButton(text="💌服务器", callback_data="server_info"),
-            InlineKeyboardButton(text="🛠️帮助", callback_data="help_mention"),
-            InlineKeyboardButton(text="❌ 关闭", callback_data="close"),
-        ],
-    ]
-)
+        Button.inline("🔱账号", data="account"),
+        Button.inline("🔖百宝箱", data="redeem_menu"),
+    ],
+    [
+        Button.inline("💌服务器", data="server_info"),
+        Button.inline("🛠️帮助", data="help_mention"),
+        Button.inline("❌ 关闭", data="close"),
+    ],
+])
 
 
 async def dump(client: Client, message: Message):

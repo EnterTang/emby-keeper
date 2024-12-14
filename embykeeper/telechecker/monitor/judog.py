@@ -1,6 +1,6 @@
 import asyncio
 import random
-from pyrogram.types import Message
+from telethon.tl.types import Message
 
 from ._base import Monitor
 from ...utils import async_partial
@@ -17,21 +17,23 @@ class JudogMonitor(Monitor):
     additional_auth = ["prime"]
 
     async def init(self):
-        channel = await self.client.get_chat("Mulgoreemby")
-        self.chat_name = channel.linked_chat.id
-        self.log.info(f"已读取剧狗频道关联群: {channel.linked_chat.title}")
-        return True
+        channel = await self.client.get_entity("Mulgoreemby")
+        if hasattr(channel, 'linked_chat'):
+            self.chat_name = channel.linked_chat.id
+            self.log.info(f"已读取剧狗频道关联群: {channel.linked_chat.title}")
+            return True
+        return False
 
     async def on_trigger(self, message: Message, key, reply):
         wr = async_partial(self.client.wait_reply, self.bot_username)
         msg: Message = await wr("/start")
-        if "选择您要使用的功能" in (msg.caption or msg.text):
+        if "选择您要使用的功能" in (msg.text or msg.raw_text):
             await asyncio.sleep(random.uniform(2, 4))
             msg = await wr("🔱账号")
-        if "账号管理中心" in (msg.caption or msg.text):
+        if "账号管理中心" in (msg.text or msg.raw_text):
             await asyncio.sleep(random.uniform(2, 4))
             msg = await wr("💡注册")
-        if "目前已无可注册资格" in (msg.caption or msg.text):
+        if "目前已无可注册资格" in (msg.text or msg.raw_text):
             return
         else:
             self.log.bind(msg=True).info(

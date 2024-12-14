@@ -1,7 +1,6 @@
 import asyncio
-from pyrogram.types import Message, InlineKeyboardMarkup
-from pyrogram.enums import MessageEntityType
-from pyrogram.errors import RPCError
+from telethon.tl.types import Message, MessageEntityMentionName
+from telethon.errors import RPCError
 
 from ..lock import pornemby_messager_enabled, pornemby_alert
 from ._base import Monitor
@@ -20,11 +19,11 @@ class PornembyDoubleMonitor(Monitor):
             self.log.info(f"由于风险急停不翻倍.")
             return
         for me in message.entities:
-            if me.type == MessageEntityType.TEXT_MENTION:
-                if me.user.id == self.client.me.id:
-                    if isinstance(message.reply_markup, InlineKeyboardMarkup):
+            if isinstance(me, MessageEntityMentionName):
+                if me.user_id == self.client.me.id:
+                    if message.buttons:
                         try:
-                            await message.click("🎲开始翻倍游戏")
+                            await message.click(text="🎲开始翻倍游戏")
                         except RPCError:
                             pass
                         else:

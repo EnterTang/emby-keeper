@@ -4,8 +4,8 @@ from datetime import datetime
 from pathlib import Path
 import random
 
-from pyrogram.types import Message
-from pyrogram.errors import RPCError
+from telethon.tl.types import Message, KeyboardButtonCallback
+from telethon.errors import RPCError
 
 from ...utils import truncate_str
 from ..link import Link
@@ -80,7 +80,7 @@ class _PornembyAnswerAnswerMonitor(Monitor):
                 finished = True
                 m: Message
                 for g in self.history_chat_name:
-                    async for m in self.client.search_messages(g, limit=100, offset=count, query="答案为"):
+                    async for m in self.client.iter_messages(g, limit=100, offset=count, search="答案为"):
                         if m.date < to_date:
                             break
                         count += 1
@@ -164,8 +164,14 @@ class _PornembyAnswerAnswerMonitor(Monitor):
                 return
         try:
             await asyncio.sleep(random.uniform(2, 4))
-            answer = await message.click(self.key_map[result])
-            self.log.debug(f"回答返回值: {answer.message} {spec}.")
+            buttons = await message.get_buttons()
+            for row in buttons:
+                for button in row:
+                    if isinstance(button, KeyboardButtonCallback) and button.text == self.key_map[result]:
+                        answer = await button.click()
+                        self.log.debug(f"回答返回值: {answer.message} {spec}.")
+                        return
+            self.log.info(f"点击失败: 未找到答案按钮 {result} {spec}.")
         except KeyError:
             self.log.info(f"点击失败: {result} 不是可用的答案 {spec}.")
         except RPCError:

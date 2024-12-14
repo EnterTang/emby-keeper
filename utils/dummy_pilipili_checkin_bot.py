@@ -5,16 +5,9 @@ from textwrap import dedent
 
 from loguru import logger
 import tomli as tomllib
-from pyrogram import filters
-from pyrogram.handlers import MessageHandler, CallbackQueryHandler
-from pyrogram.types import (
-    Message,
-    BotCommand,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    CallbackQuery,
-)
-from pyrogram.enums import ParseMode
+from telethon import events, Button
+from telethon.tl.types import Message, User
+from telethon.tl.custom import InlineKeyboardMarkup
 
 from embykeeper.utils import AsyncTyper
 from embykeeper.telechecker.tele import Client, API_KEY
@@ -25,18 +18,16 @@ states = {}
 signed = {}
 
 main_photo = Path(__file__).parent / "data/main.png"
-main_reply_markup = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(text="️👥 用户功能", callback_data="members"),
-            InlineKeyboardButton(text="🌐 服务器", callback_data="server"),
-        ],
-        [
-            InlineKeyboardButton(text="🎟️ 使用注册码", callback_data="exchange"),
-            InlineKeyboardButton(text="🎯 签到", callback_data="checkin"),
-        ],
-    ]
-)
+main_reply_markup = InlineKeyboardMarkup([
+    [
+        Button.inline("️👥 用户功能", data="members"),
+        Button.inline("🌐 服务器", data="server"),
+    ],
+    [
+        Button.inline("🎟️ 使用注册码", data="exchange"),
+        Button.inline("🎯 签到", data="checkin"),
+    ],
+])
 
 
 async def dump(client: Client, message: Message):
@@ -54,12 +45,12 @@ async def start(client: Client, message: Message):
     📠请在下方选择您要使用的功能!
     """.strip()
     )
-    await client.send_photo(
-        message.chat.id,
+    await client.send_file(
+        message.chat_id,
         main_photo,
         caption=content,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=main_reply_markup,
+        parse_mode='md',
+        buttons=main_reply_markup,
     )
 
 

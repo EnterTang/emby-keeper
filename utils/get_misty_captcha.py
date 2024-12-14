@@ -24,7 +24,7 @@ async def generate(config: Path, num: int = 200, output: Path = "captchas.txt"):
             m = MistyMonitor(tg)
             wr = async_partial(tg.wait_reply, m.bot_username, timeout=None)
             msg = await wr("/cancel")
-            if msg.caption and "选择您要使用的功能" in msg.caption:
+            if msg.text and "选择您要使用的功能" in msg.text:
                 msg = await wr("⚡️账号功能")
                 if not "请选择功能" in msg.text:
                     logger.error("账户错误.")
@@ -36,7 +36,7 @@ async def generate(config: Path, num: int = 200, output: Path = "captchas.txt"):
                     if msg.text:
                         continue
                     if msg.caption and "请输入验证码" in msg.caption:
-                        photos.append(msg.photo.file_id)
+                        photos.append(msg.photo.id)
                         msg = await wr("/cancel")
                         if not "请选择功能" in msg.text:
                             logger.error("账户错误.")
@@ -57,7 +57,7 @@ async def label(config: Path, inp: Path = "captchas.txt"):
     async with ClientsSession(config["telegram"][:1], proxy=proxy) as clients:
         async for tg in clients:
             for photo in tqdm(photos, desc="标记验证码"):
-                await tg.send_photo(chat, photo)
+                await tg.send_file(chat, photo)
                 labelmsg = await tg.wait_reply(chat, timeout=None, outgoing=True)
                 if not len(labelmsg.text) == 5:
                     continue

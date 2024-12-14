@@ -13,12 +13,11 @@ from typing import Iterable, List, Optional, Union
 from appdirs import user_data_dir
 from loguru import logger
 from PIL import Image
-from pyrogram import filters
-from pyrogram.errors import UsernameNotOccupied, FloodWait, UsernameInvalid
-from pyrogram.handlers import EditedMessageHandler, MessageHandler
-from pyrogram.types import InlineKeyboardMarkup, Message, ReplyKeyboardMarkup
-from pyrogram.raw.functions.account import GetNotifySettings
-from pyrogram.raw.types import PeerNotifySettings, InputNotifyPeer
+from telethon import TelegramClient, events, types, Button
+from telethon.errors import UsernameNotOccupiedError, FloodWaitError, UsernameInvalidError
+from telethon.tl.custom import Message
+from telethon.tl.functions.account import GetNotifySettingsRequest
+from telethon.tl.types import InputPeerNotifySettings, InputNotifyPeer
 from thefuzz import fuzz, process
 
 from embykeeper import __name__ as __product__
@@ -100,7 +99,7 @@ class BaseBotCheckin(ABC):
         """
         基础签到类.
         参数:
-            client: Pyrogram 客户端
+            client: Telethon 客户端
             retries: 最大重试次数
             timeout: 签到超时时间
             nofail: 启用错误处理外壳, 当错误时报错但不退出
@@ -116,7 +115,7 @@ class BaseBotCheckin(ABC):
         self.proxy = proxy
         self.config = config
         self.finished = asyncio.Event()  # 签到完成事件
-        self.log = logger.bind(scheme="telechecker", name=self.name, username=client.me.name)  # 日志组件
+        self.log = logger.bind(scheme="telechecker", name=self.name, username=client.me.first_name)  # 日志组件
 
     async def _start(self):
         """签到器的入口函数的错误处理外壳."""
@@ -186,22 +185,18 @@ class BotCheckin(BaseBotCheckin):
         if instant:
             self.checked_retries = None
 
-    def get_filter(self):
-        """设定要签到的目标."""
-        filter = filters.all
-        if self.bot_username:
-            filter = filter & filters.user(self.bot_username)
+    def get_event_pattern(self):
+        """设定要监控的事件模式"""
         if self.chat_name:
-            filter = filter & filters.chat(self.chat_name)
-        else:
-            filter = filter & filters.private
-        return filter
+            return events.NewMessage(chats=self.chat_name, from_users=self.bot_username)
+        return events.NewMessage(from_users=self.bot_username)
 
     def get_handlers(self):
         """设定要监控的更新的类型."""
+        pattern = self.get_event_pattern()
         return [
-            MessageHandler(self._message_handler, self.get_filter()),
-            EditedMessageHandler(self._message_handler, self.get_filter()),
+            (events.NewMessage(pattern=pattern), self._message_handler),
+            (events.MessageEdited(pattern=pattern), self._message_handler),
         ]
 
     @asynccontextmanager
@@ -209,12 +204,12 @@ class BotCheckin(BaseBotCheckin):
         """执行监控上下文."""
         group = await self.group_pool.append(self)
         handlers = self.get_handlers()
-        for h in handlers:
-            await self.client.add_handler(h, group=group)
+        for event, callback in handlers:
+            self.client._client.add_event_handler(callback, event)
         yield
-        for h in handlers:
+        for event, callback in handlers:
             try:
-                await self.client.remove_handler(h, group=group)
+                self.client._client.remove_event_handler(callback, event)
             except ValueError:
                 pass
 
@@ -280,14 +275,14 @@ class BotCheckin(BaseBotCheckin):
         while True:
             try:
                 chat = await self.client.get_chat(ident)
-            except (UsernameNotOccupied, UsernameInvalid) as e:
+            except (UsernameNotOccupiedError, UsernameInvalidError) as e:
                 self.log.warning(f'初始化错误: 会话 "{ident}" 已不存在.')
                 return CheckinResult.FAIL
             except KeyError as e:
                 self.log.info(f"初始化错误: 无法访问, 您可能已被封禁: {e}.")
                 show_exception(e)
                 return CheckinResult.FAIL
-            except FloodWait as e:
+            except FloodWaitError as e:
                 if e.value < 360:
                     self.log.info(f"初始化信息: Telegram 要求等待 {e.value} 秒.")
                     await asyncio.sleep(e.value)
@@ -334,11 +329,11 @@ class BotCheckin(BaseBotCheckin):
             if not self.chat_name:
                 self.log.debug(f"[gray50]禁用提醒 {self.timeout} 秒: {bot.username}[/]")
                 peer = InputNotifyPeer(peer=await self.client.resolve_peer(ident))
-                settings: PeerNotifySettings = await self.client.invoke(GetNotifySettings(peer=peer))
+                settings: InputPeerNotifySettings = await self.client.invoke(GetNotifySettingsRequest(peer=peer))
                 old_mute_until = settings.mute_until
                 try:
                     await self.client.mute_chat(ident, time.time() + self.timeout + 10)
-                except FloodWait:
+                except FloodWaitError:
                     self.log.debug(f"[gray50]设置禁用提醒因访问超限而失败: {bot.username}[/]")
             try:
                 async with self.listener():
@@ -382,8 +377,8 @@ class BotCheckin(BaseBotCheckin):
                         try:
                             await asyncio.wait_for(self.client.mute_chat(ident, until=old_mute_until), 3)
                         except asyncio.TimeoutError:
-                            self.log.debug(f"[gray50]重新设置通知设置失败: {ident}[/]")
-                        except FloodWait:
+                            self.log.debug(f"[gray50]重新设置通��设置失败: {ident}[/]")
+                        except FloodWaitError:
                             self.log.debug(f"[gray50]重新设置通知设置因访问超限而失败: {ident}[/]")
                         else:
                             self.log.debug(f"[gray50]重新设置通知设置成功: {ident}[/]")
@@ -416,7 +411,7 @@ class BotCheckin(BaseBotCheckin):
         return True
 
     async def cleanup(self):
-        """可重写的签到结束后的清理函数, 执行签到成功或失败后运行, 返回 False 将视为清理错误."""
+        """可重写的签到结束后的清理函数, 执行签到成功或失败后运行, 返回 False 将视为清理误."""
         return True
 
     async def walk_history(self, limit=0):
@@ -465,7 +460,7 @@ class BotCheckin(BaseBotCheckin):
                 await self.fail()
                 raise
             else:
-                self.log.warning(f"发生错误, 签到器将停止.")
+                self.log.warning(f"发生错误, 签到将停止.")
                 show_exception(e, regular=False)
                 await self.fail()
                 message.continue_propagation()
@@ -609,8 +604,8 @@ class BotCheckin(BaseBotCheckin):
                 "我正在进行签到, 机器将显示指令或状态, 我需要通过回答问题以完成签到, 现在机器给出的值为:\n\n"
                 f"{content}\n\n"
                 f"你可选: {', '.join(button_specs)} 中的一个作为回答.\n"
-                "如果您认为不应该进行任何操作, 请输出 'NO_RESP'.\n"
-                "如果这是一个指令, 请输出您需要发送或点击的内容, 不要说明这是一个指令, 不要说明需要发送文本消息, 仅仅输出发送或点击的内容.\n"
+                "如果您认为不应该进行任何操作, 请输入 'NO_RESP'.\n"
+                "如果��是一个指令, 请输出您需要发送或点击的内容, 不要说明这是一个指令, 不要说明需要发送文本消息, 仅仅输出发送或点击的内容.\n"
                 "如果这是一个状态, 请输出 'IS_STATUS', 禁止输出其他内容."
             )
             for _ in range(3):
@@ -631,7 +626,7 @@ class BotCheckin(BaseBotCheckin):
                         self.log.debug(f"当前按钮: {', '.join(button_specs)}")
                         b, s = process.extractOne(answer, buttons, scorer=fuzz.partial_ratio)
                         if s < 70:
-                            self.log.info(f"找不到对应回答的按钮, 正在重试.")
+                            self.log.info(f"不到对应回答的按钮, 正在重试.")
                             await asyncio.sleep(3)
                             continue
                         else:
@@ -699,7 +694,7 @@ class AnswerBotCheckin(BotCheckin):
         self.message: Message = None  # 存储可用于回复的带按钮的消息.
 
     async def walk_history(self, limit=0):
-        """处理 limit 条历史消息, 并检测是否有验证码或按钮."""
+        """处理 limit 条历史���息, 并检测是否有验证码或按钮."""
         try:
             answer = None
             captcha = None
@@ -723,10 +718,10 @@ class AnswerBotCheckin(BotCheckin):
     def get_keys(self, message: Message):
         """获得所有按钮信息."""
         reply_markup = message.reply_markup
-        if isinstance(reply_markup, InlineKeyboardMarkup):
-            return [k.text for r in reply_markup.inline_keyboard for k in r]
-        elif isinstance(reply_markup, ReplyKeyboardMarkup):
-            return [k.text for r in reply_markup.keyboard for k in r]
+        if isinstance(reply_markup, types.ReplyInlineMarkup):
+            return [k.text for r in reply_markup.rows for k in r.buttons]
+        elif isinstance(reply_markup, types.ReplyKeyboardMarkup):
+            return [k.text for r in reply_markup.rows for k in r]
 
     def is_valid_answer(self, message: Message):
         """确认消息是回复按钮消息."""

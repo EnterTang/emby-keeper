@@ -5,7 +5,6 @@ import tomli as tomllib
 
 from ddddocr import DdddOcr
 from PIL import Image
-from pyrogram.enums import ParseMode
 
 from embykeeper.telechecker.tele import ClientsSession
 from embykeeper.utils import AsyncTyper
@@ -25,9 +24,9 @@ async def generate(config: Path, output: Path = "captchas.txt"):
         async for tg in clients:
             photos = []
             try:
-                async for msg in tg.get_chat_history(bot):
+                async for msg in tg.iter_messages(bot):
                     if msg.photo:
-                        photos.append(msg.photo.file_id)
+                        photos.append(msg.photo.id)
             finally:
                 with open(output, "a+", encoding="utf-8") as f:
                     f.writelines(str(photo) + "\n" for photo in photos)
@@ -49,8 +48,8 @@ async def label(config: Path, inp: Path = "captchas.txt", onnx: Path = None, cha
             for photo in tqdm(photos, desc="标记验证码"):
                 data = await tg.download_media(photo, in_memory=True)
                 image = Image.open(data)
-                await tg.send_photo(
-                    chat, photo, caption=f"`{ocr.classification(image)}`", parse_mode=ParseMode.MARKDOWN
+                await tg.send_file(
+                    chat, photo, caption=f"`{ocr.classification(image)}`", parse_mode='md'
                 )
                 labelmsg = await tg.wait_reply(chat, timeout=None, outgoing=True)
                 if not len(labelmsg.text) == 4:

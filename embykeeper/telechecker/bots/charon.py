@@ -1,8 +1,8 @@
 import asyncio
 import re
 
-from pyrogram import Client
-from pyrogram.types import Message
+from telethon import TelegramClient, types
+
 from ..link import Link
 from ._base import BotCheckin
 
@@ -27,7 +27,7 @@ class CharonCheckin(BotCheckin):
             else:
                 break
 
-    async def message_handler(self, client: Client, message: Message):
+    async def message_handler(self, client: TelegramClient, message: types.Message):
         if message.text:
             match = re.search(r"请打开并复制网页的内容, 粘贴回复:\s*(.*)", message.text)
             if match:
@@ -39,7 +39,7 @@ class CharonCheckin(BotCheckin):
         for i in range(3):
             _, result = await Link(self.client).captcha_url("charon", url)
             if result:
-                await self.client.send_message(self.bot_username, result)
+                await self.client._client.send_message(self.bot_username, result)
                 break
             else:
                 self.log.warning(f"正在重试解析验证码 ({i+1} / 3).")

@@ -1,8 +1,8 @@
 import asyncio
 import random
 
-from pyrogram.types import Message
-from pyrogram.errors import BadRequest
+from telethon.tl.custom import Message
+from telethon.errors import BadRequestError
 
 from ._base import AnswerBotCheckin
 
@@ -22,10 +22,10 @@ class PornembyCheckin(AnswerBotCheckin):
         await asyncio.sleep(random.uniform(2, 4))
         async with self.client.catch_reply(self.bot_username) as f:
             try:
-                await message.click("点击签到")
+                await message.click(text="点击签到")
             except TimeoutError:
                 pass
-            except BadRequest:
+            except BadRequestError:
                 self.log.warning(f"签到失败: 账户错误.")
                 await self.fail()
             try:

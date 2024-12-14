@@ -1,4 +1,5 @@
-from pyrogram.types import Message
+from telethon.tl.custom import Message
+from telethon import Button
 
 from ._base import BotCheckin
 
@@ -14,11 +15,11 @@ class HKACheckin(BotCheckin):
     async def message_handler(self, client, message: Message):
         text = message.caption or message.text
         if "选择菜单" in text:
-            keys = [k.text for r in message.reply_markup.inline_keyboard for k in r]
-            for k in keys:
-                if "签到" in k:
+            buttons = [b for row in message.buttons for b in row]
+            for button in buttons:
+                if isinstance(button, Button.Inline) and "签到" in button.text:
                     try:
-                        await message.click(k)
+                        await message.click(data=button.data)
                     except TimeoutError:
                         self.log.debug(f"点击签到按钮无响应, 可能按钮未正确处理点击回复. 一般来说不影响签到.")
                     return

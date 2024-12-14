@@ -1,8 +1,8 @@
 import asyncio
 import random
 import re
-from pyrogram.types import Message
-from pyrogram.raw.types.messages import BotCallbackAnswer
+from telethon import types, events, Button
+from telethon.tl.custom import Message
 
 from ._base import BotCheckin
 
@@ -18,13 +18,14 @@ class PilipiliCheckin(BotCheckin):
         if (
             message.caption
             and ("请选择功能" in message.caption or "用户面板" in message.caption)
-            and message.reply_markup
+            and message.buttons
         ):
-            keys = [k.text for r in message.reply_markup.inline_keyboard for k in r]
+            keys = [k.text for row in message.buttons for k in row]
             for k in keys:
                 if "签到" in k:
-                    answer: BotCallbackAnswer = await message.click(k)
-                    await self.on_text(Message(id=0), answer.message)
+                    result = await message.click(data=k)
+                    if result and hasattr(result, 'message'):
+                        await self.on_text(Message(id=0), result.message)
                     return
             else:
                 self.log.warning(f"签到失败: 账户错误.")
@@ -46,7 +47,7 @@ class PilipiliCheckin(BotCheckin):
                     result = int(num1 / num2)
                 self.log.info(f"解析数学题答案: {num1}{operator}{num2}={result}")
                 await asyncio.sleep(random.uniform(10, 15))
-                await self.client.send_message(self.bot_username, str(result))
+                await self.client._client.send_message(self.bot_username, str(result))
                 return
             else:
                 self.log.warning(f"签到时出现未知题目.")

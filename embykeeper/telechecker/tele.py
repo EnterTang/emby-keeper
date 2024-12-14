@@ -18,24 +18,23 @@ import logging
 from rich.prompt import Prompt
 from appdirs import user_data_dir
 from loguru import logger
-import pyrogram
-from pyrogram import raw, types, utils, filters, dispatcher, session
-from pyrogram.enums import SentCodeType
-from pyrogram.errors import (
-    BadRequest,
+from telethon import TelegramClient, events, types, Button
+from telethon.tl import functions, types as tl_types
+from telethon.errors import (
+    ApiIdInvalidError,
+    AuthKeyUnregisteredError,
+    PhoneCodeInvalidError,
+    SessionPasswordNeededError,
+    FloodWaitError,
+    PhoneNumberInvalidError,
+    PhoneNumberBannedError,
+    UnauthorizedError,
     RPCError,
-    ApiIdPublishedFlood,
-    Unauthorized,
-    SessionPasswordNeeded,
-    CodeInvalid,
-    PhoneCodeInvalid,
-    BadMsgNotification,
-    FloodWait,
-    PhoneNumberInvalid,
-    PhoneNumberBanned,
 )
-from pyrogram.handlers import MessageHandler, RawUpdateHandler, DisconnectHandler, EditedMessageHandler
-from pyrogram.handlers.handler import Handler
+from telethon.errors.rpcerrorlist import (
+    ApiIdPublishedFloodError,
+)
+from telethon.sessions import StringSession
 from aiocache import Cache
 import aiohttp
 from aiohttp_socks import ProxyConnector, ProxyType, ProxyConnectionError, ProxyTimeoutError
@@ -51,15 +50,10 @@ _decode = lambda x: "".join(map(chr, to_iterable(pickle.loads(x))))
 
 API_KEY = {
     "_": {"api_id": _decode(_id), "api_hash": _decode(_hash)}
-    # "nicegram": {"api_id": "94575", "api_hash": "a3406de8d171bb422bb6ddf3bbd800e2"},
-    # "tgx-android": {"api_id": "21724", "api_hash": "3e0cb5efcd52300aec5994fdfc5bdc16"},
-    # "tg-react": {"api_id": "414121", "api_hash": "db09ccfc2a65e1b14a937be15bdb5d4b"},
 }
-
 
 def _name(self: Union[types.User, types.Chat]):
     return " ".join([n for n in (self.first_name, self.last_name) if n])
-
 
 def _chat_name(self: types.Chat):
     if self.title:
@@ -67,38 +61,40 @@ def _chat_name(self: types.Chat):
     else:
         return _name(self)
 
-
+# Add name properties to Telethon types
 setattr(types.User, "name", property(_name))
 setattr(types.Chat, "name", property(_chat_name))
-
 
 class LogRedirector(logging.StreamHandler):
     def emit(self, record):
         try:
             if record.levelno >= logging.WARNING:
-                logger.debug(f"Pyrogram log: {record.getMessage()}")
+                logger.debug(f"Telethon log: {record.getMessage()}")
         except (KeyboardInterrupt, SystemExit):
             raise
         except:
             self.handleError(record)
 
+telethon_logger = logging.getLogger("telethon")
+for h in telethon_logger.handlers[:]:
+    telethon_logger.removeHandler(h)
+telethon_logger.addHandler(LogRedirector())
 
-pyrogram_session_logger = logging.getLogger("pyrogram")
-for h in pyrogram_session_logger.handlers[:]:
-    pyrogram_session_logger.removeHandler(h)
-pyrogram_session_logger.addHandler(LogRedirector())
-
-
-class Dispatcher(dispatcher.Dispatcher):
-    def __init__(self, client: Client):
-        super().__init__(client)
+class Dispatcher:
+    def __init__(self, client: TelegramClient):
+        self.client = client
+        self.groups = {}
+        self.updates_queue = asyncio.Queue()
+        self.loop = asyncio.get_event_loop()
         self.mutex = asyncio.Lock()
+        self.handler_worker_tasks = []
 
     async def start(self):
         logger.debug("Telegram 更新分配器启动.")
-        if not self.client.no_updates:
+        if not getattr(self.client, 'no_updates', False):
             self.handler_worker_tasks = [
-                self.loop.create_task(self.handler_worker()) for _ in range(self.client.workers)
+                self.loop.create_task(self.handler_worker()) 
+                for _ in range(getattr(self.client, 'workers', 1))
             ]
 
     def add_handler(self, handler, group: int):
@@ -108,7 +104,6 @@ class Dispatcher(dispatcher.Dispatcher):
                     self.groups[group] = []
                     self.groups = OrderedDict(sorted(self.groups.items()))
                 self.groups[group].append(handler)
-                # logger.debug(f"增加了 Telegram 更新处理器: {handler.__class__.__name__}.")
 
         return self.loop.create_task(fn())
 
@@ -118,28 +113,19 @@ class Dispatcher(dispatcher.Dispatcher):
                 if group not in self.groups:
                     raise ValueError(f"Group {group} does not exist. Handler was not removed.")
                 self.groups[group].remove(handler)
-                # logger.debug(f"移除了 Telegram 更新处理器: {handler.__class__.__name__}.")
 
         return self.loop.create_task(fn())
 
     async def handler_worker(self):
         while True:
             packet = await self.updates_queue.get()
-
+            
             if packet is None:
                 break
 
             try:
                 update, users, chats = packet
-                parser = self.update_parsers.get(type(update), None)
-
-                try:
-                    parsed_update, handler_type = (
-                        await parser(update, users, chats) if parser is not None else (None, type(None))
-                    )
-                except ValueError:
-                    continue
-
+                
                 async with self.mutex:
                     groups = {i: g[:] for i, g in self.groups.items()}
 
@@ -147,15 +133,15 @@ class Dispatcher(dispatcher.Dispatcher):
                     for handler in group:
                         args = None
 
-                        if isinstance(handler, handler_type):
+                        if isinstance(handler, events.NewMessage.Event):
                             try:
-                                if await handler.check(self.client, parsed_update):
-                                    args = (parsed_update,)
+                                if await handler.filter(update):
+                                    args = (update,)
                             except Exception as e:
                                 logger.warning(f"Telegram 错误: {e}")
                                 continue
 
-                        elif isinstance(handler, RawUpdateHandler):
+                        elif isinstance(handler, events.Raw):
                             args = (update, users, chats)
 
                         if args is None:
@@ -166,12 +152,13 @@ class Dispatcher(dispatcher.Dispatcher):
                                 await handler.callback(self.client, *args)
                             else:
                                 await self.loop.run_in_executor(
-                                    self.client.executor, handler.callback, self.client, *args
+                                    getattr(self.client, 'executor', None), 
+                                    handler.callback,
+                                    self.client,
+                                    *args
                                 )
-                        except pyrogram.StopPropagation:
+                        except events.StopPropagation:
                             raise
-                        except pyrogram.ContinuePropagation:
-                            continue
                         except Exception as e:
                             logger.error(f"更新回调函数内发生错误.")
                             show_exception(e, regular=False)
@@ -179,7 +166,7 @@ class Dispatcher(dispatcher.Dispatcher):
                     else:
                         continue
                     break
-            except pyrogram.StopPropagation:
+            except events.StopPropagation:
                 pass
             except TimeoutError:
                 logger.info("网络不稳定, 可能遗漏消息.")
@@ -188,9 +175,46 @@ class Dispatcher(dispatcher.Dispatcher):
                 show_exception(e, regular=False)
 
 
-class Client(pyrogram.Client):
+class Client(TelegramClient):
     def __init__(self, *args, **kw):
-        super().__init__(*args, **kw)
+        self.phone_number = kw.pop('phone_number', None)
+        self.phone_code = kw.pop('phone_code', None) 
+        self.password = kw.pop('password', None)
+        self.bot_token = kw.pop('bot_token', None)
+        self.session_string = kw.pop('session_string', None)
+        self.in_memory = kw.pop('in_memory', True)
+        self.workdir = kw.pop('workdir', None)
+        
+        # Remove system info parameters that aren't needed
+        name = kw.pop('name', None)
+        kw.pop('device_model', None)
+        kw.pop('system_version', None)
+        kw.pop('app_version', None)
+        kw.pop('lang_code', None)
+        kw.pop('sleep_threshold', None)
+        
+        # Session handling
+        if self.session_string and len(self.session_string.strip()) > 0:
+            try:
+                session = StringSession(self.session_string.strip())
+            except ValueError:
+                logger.warning(f'账号 "{self.phone_number}" 的 session 字符串无效, 将尝试重新登录.')
+                session = StringSession()
+        else:
+            if self.in_memory:
+                session = StringSession()
+            else:
+                session = str(Path(self.workdir) / name) if name else StringSession()
+                
+        # Initialize TelegramClient first
+        super().__init__(
+            session,
+            kw.pop('api_id'),
+            kw.pop('api_hash'),
+            **kw
+        )
+        
+        # Initialize additional attributes
         self.cache = Cache()
         self.lock = asyncio.Lock()
         self.dispatcher = Dispatcher(self)
@@ -199,100 +223,98 @@ class Client(pyrogram.Client):
         self._last_invoke = {}
         self._invoke_lock = asyncio.Lock()
         self._login_time: datetime = None
+        self.me = None
+        self._client = self
+
+    async def start(self, *args, **kwargs):
+        """Override start method to get user info"""
+        await TelegramClient.start(self, *args, **kwargs)
+        self.me = await self.get_me()
+        return self
 
     async def authorize(self):
         if self.bot_token:
-            return await self.sign_in_bot(self.bot_token)
+            await self.sign_in(bot_token=self.bot_token)
+            return await self.get_me()
+            
         retry = False
         while True:
             try:
-                sent_code = await self.send_code(self.phone_number)
-                code_target = {
-                    SentCodeType.APP: " Telegram 客户端",
-                    SentCodeType.SMS: "短信",
-                    SentCodeType.CALL: "来电",
-                    SentCodeType.FLASH_CALL: "闪存呼叫",
-                    SentCodeType.FRAGMENT_SMS: " Fragment 短信",
-                    SentCodeType.EMAIL_CODE: "邮件",
-                }
                 if not self.phone_code:
+                    result = await self.send_code_request(self.phone_number)
+                    code_type = {
+                        "app": "Telegram 客户端",
+                        "sms": "短信",
+                        "call": "来电",
+                        "flash_call": "闪存呼叫",
+                        "fragment_sms": "Fragment 信",
+                        "email": "邮件"
+                    }.get(result.type, "未知")
+                    
                     if retry:
                         msg = f'验证码错误, 请重新输入 "{self.phone_number}" 的登录验证码 (按回车确认)'
                     else:
-                        msg = f'请从{code_target[sent_code.type]}接收 "{self.phone_number}" 的登录验证码 (按回车确认)'
+                        msg = f'请从{code_type}接收 "{self.phone_number}" 的登录验证码 (按回车确认)'
                     try:
                         self.phone_code = Prompt.ask(" " * 23 + msg, console=var.console)
                     except EOFError:
-                        raise BadRequest(
+                        raise ApiIdInvalidError(
                             f'登录 "{self.phone_number}" 时出现异常: 您正在使用非交互式终端, 无法输入验证码.'
                         )
-                signed_in = await self.sign_in(self.phone_number, sent_code.phone_code_hash, self.phone_code)
-            except (CodeInvalid, PhoneCodeInvalid):
+                
+                try:
+                    signed_in = await self.sign_in(phone=self.phone_number, code=self.phone_code)
+                except SessionPasswordNeededError:
+                    retry = False
+                    while True:
+                        if not self.password:
+                            if retry:
+                                msg = f'密码错误, 请重新输入 "{self.phone_number}" 的两步验证密码 (不显示, 按回车确认)'
+                            else:
+                                msg = f'需要输入 "{self.phone_number}" 的两步验证密码 (不显示, 按回车确认)'
+                            self.password = Prompt.ask(" " * 23 + msg, password=True, console=var.console)
+                        try:
+                            return await self.sign_in(password=self.password)
+                        except ApiIdInvalidError:
+                            self.password = None
+                            retry = True
+                else:
+                    return signed_in
+                    
+            except PhoneCodeInvalidError:
                 self.phone_code = None
                 retry = True
-            except SessionPasswordNeeded:
-                retry = False
-                while True:
-                    if not self.password:
-                        if retry:
-                            msg = f'密码错误, 请重新输入 "{self.phone_number}" 的两步验证密码 (不显示, 按回车确认)'
-                        else:
-                            msg = f'需要输入 "{self.phone_number}" 的两步验证密码 (不显示, 按回车确认)'
-                        self.password = Prompt.ask(" " * 23 + msg, password=True, console=var.console)
-                    try:
-                        return await self.check_password(self.password)
-                    except BadRequest:
-                        self.password = None
-                        retry = True
-            except FloodWait:
-                raise BadRequest(f'登录 "{self.phone_number}" 时出现异常: 登录过于频繁.')
-            except PhoneNumberInvalid:
-                raise BadRequest(
-                    f'登录 "{self.phone_number}" 时出现异常: 您使用了错误的手机号 (格式错误或没有注册).'
+            except FloodWaitError:
+                raise ApiIdInvalidError(f'登录 "{self.phone_number}" 时出现异常: 登录过于频繁.')
+            except PhoneNumberInvalidError:
+                raise ApiIdInvalidError(
+                    f'登录 "{self.phone_number}" 时出现异常: 您使用了错误手机号 (格式错误或没有册).'
                 )
-            except PhoneNumberBanned:
-                raise BadRequest(f'登录 "{self.phone_number}" 时出现异常: 您的账户已被封禁.')
+            except PhoneNumberBannedError:
+                raise ApiIdInvalidError(f'登录 "{self.phone_number}" 时出现异常: 您的账户已被封禁.')
             except Exception as e:
                 logger.error(f"登录时出现异常错误!")
                 show_exception(e, regular=False)
                 retry = True
-            else:
-                break
-        if isinstance(signed_in, types.User):
-            return signed_in
-        else:
-            raise BadRequest("该账户尚未注册")
 
-    def add_handler(self, handler: Handler, group: int = 0):
-        if isinstance(handler, DisconnectHandler):
-            self.disconnect_handler = handler.callback
+    def add_handler(self, handler, group: int = 0):
+        return self.dispatcher.add_handler(handler, group)
 
-            async def dummy():
-                pass
+    def remove_handler(self, handler, group: int = 0):
+        return self.dispatcher.remove_handler(handler, group)
 
-            return asyncio.ensure_future(dummy())
-        else:
-            return self.dispatcher.add_handler(handler, group)
-
-    def remove_handler(self, handler: Handler, group: int = 0):
-        if isinstance(handler, DisconnectHandler):
-            self.disconnect_handler = None
-
-            async def dummy():
-                pass
-
-            return asyncio.ensure_future(dummy())
-        else:
-            return self.dispatcher.remove_handler(handler, group)
-
-    async def get_dialogs(
-        self, limit: int = 0, exclude_pinned=None, folder_id=None
-    ) -> Optional[AsyncGenerator["types.Dialog", None]]:
+    async def get_dialogs(self, limit: int = 0, exclude_pinned=None, folder_id=None) -> Optional[AsyncGenerator["types.Dialog", None]]:
         async with self.lock:
             cache_id = f"dialogs_{self.phone_number}_{folder_id}_{1 if exclude_pinned else 0}"
-            (offset_id, offset_date, offset_peer), cache = await self.cache.get(
-                cache_id, ((0, 0, raw.types.InputPeerEmpty()), [])
-            )
+            offset_date = 0
+            offset_id = 0
+            offset_peer = types.InputPeerEmpty()
+            cache = []
+            
+            try:
+                (offset_id, offset_date, offset_peer), cache = await self.cache.get(cache_id)
+            except:
+                pass
 
             current = 0
             total = limit or (1 << 31) - 1
@@ -305,160 +327,102 @@ class Client(pyrogram.Client):
                     return
 
             while True:
-                r = await self.invoke(
-                    raw.functions.messages.GetDialogs(
-                        offset_date=offset_date,
-                        offset_id=offset_id,
-                        offset_peer=offset_peer,
-                        limit=limit,
-                        hash=0,
-                        exclude_pinned=exclude_pinned,
-                        folder_id=folder_id,
-                    ),
-                    sleep_threshold=60,
-                )
+                result = await self(functions.messages.GetDialogs(
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_peer=offset_peer,
+                    limit=limit,
+                    hash=0,
+                    exclude_pinned=exclude_pinned,
+                    folder_id=folder_id
+                ))
 
-                users = {i.id: i for i in r.users}
-                chats = {i.id: i for i in r.chats}
+                dialogs = result.dialogs
+                messages = {m.id: m for m in result.messages}
+                users = {u.id: u for u in result.users}
+                chats = {c.id: c for c in result.chats}
 
-                messages = {}
+                for dialog in dialogs:
+                    yield dialog
 
-                for message in r.messages:
-                    if isinstance(message, raw.types.MessageEmpty):
-                        continue
-
-                    chat_id = utils.get_peer_id(message.peer_id)
-                    try:
-                        messages[chat_id] = await types.Message._parse(self, message, users, chats)
-                    except RPCError:
-                        continue
-
-                dialogs = []
-
-                for dialog in r.dialogs:
-                    if not isinstance(dialog, raw.types.Dialog):
-                        continue
-                    try:
-                        dialogs.append(types.Dialog._parse(self, dialog, messages, users, chats))
-                    except BadRequest:
-                        continue
+                    current += 1
+                    if current >= total:
+                        return
 
                 if not dialogs:
                     return
 
                 last = dialogs[-1]
+                offset_date = messages[last.top_message].date
+                offset_peer = dialog.peer
+                offset_id = last.top_message
 
-                offset_id = last.top_message.id
-                offset_date = utils.datetime_to_timestamp(last.top_message.date)
-                offset_peer = await self.resolve_peer(last.chat.id)
-
-                _, cache = await self.cache.get(cache_id, ((0, 0, raw.types.InputPeerEmpty()), []))
                 await self.cache.set(
-                    cache_id, ((offset_id, offset_date, offset_peer), cache + dialogs), ttl=120
+                    cache_id,
+                    ((offset_id, offset_date, offset_peer), cache + dialogs),
+                    ttl=120
                 )
-                for dialog in dialogs:
-                    yield dialog
-
-                    current += 1
-
-                    if current >= total:
-                        return
 
     @asynccontextmanager
     async def catch_reply(self, chat_id: Union[int, str], outgoing=False, filter=None):
-        async def handler_func(client, message, future: asyncio.Future):
+        future = asyncio.Future()
+        
+        async def handler(event):
             try:
-                future.set_result(message)
+                future.set_result(event.message)
             except asyncio.InvalidStateError:
                 pass
-
-        future = asyncio.Future()
-        f = filters.chat(chat_id)
+                
+        builder = events.NewMessage(chats=chat_id)
         if not outgoing:
-            f = f & (~filters.outgoing)
+            builder.outgoing = False
         if filter:
-            f = f & filter
-        handler = MessageHandler(async_partial(handler_func, future=future), f)
-        await self.add_handler(handler, group=0)
+            original_filter = builder.filter
+            
+            async def combined_filter(event):
+                return await original_filter(event) and await filter(event)
+                
+            builder.filter = combined_filter
+            
+        self.add_event_handler(handler, builder)
         try:
             yield future
         finally:
-            await self.remove_handler(handler, group=0)
-
-    async def invoke(
-        self,
-        query,
-        retries: int = session.Session.MAX_RETRIES,
-        timeout: float = session.Session.WAIT_TIMEOUT,
-        sleep_threshold: float = None,
-    ):
-        special_methods = {"SendMessage", "DeleteMessages"}
-        except_methods = {"GetMessages", "GetChannelDifference", "GetStickerSet"}
-
-        query_name = query.__class__.__name__
-
-        if query_name in special_methods:
-            if self._login_time:
-                time_since_login = (datetime.now() - self._login_time).total_seconds()
-                if time_since_login < 10:
-                    wait_time = 10 - time_since_login
-                    logger.info(
-                        f"距离登录时间 {time_since_login:.1f} 秒, 等待 {wait_time:.1f} 秒以执行下一步操作."
-                    )
-                    await asyncio.sleep(wait_time)
-
-            async with self._special_invoke_lock:
-                now = datetime.now().timestamp()
-                last_invoke = self._last_special_invoke.get(query_name, 0)
-                if now - last_invoke < 3:
-                    wait_time = 3 - (now - last_invoke)
-                    await asyncio.sleep(wait_time)
-                self._last_special_invoke[query_name] = datetime.now().timestamp()
-
-        if query_name not in except_methods:
-            async with self._invoke_lock:
-                now = datetime.now().timestamp()
-                last_invoke = self._last_invoke.get(query_name, 0)
-                if now - last_invoke < 1:
-                    wait_time = 1 - (now - last_invoke)
-                    await asyncio.sleep(wait_time)
-                self._last_invoke[query_name] = datetime.now().timestamp()
-
-        logger.trace(f"请求: {query_name}")
-        return await super().invoke(query, retries=retries, timeout=timeout, sleep_threshold=sleep_threshold)
+            self.remove_event_handler(handler)
 
     @asynccontextmanager
     async def catch_edit(self, message: types.Message, filter=None):
-        def filter_message(id: int):
-            async def func(flt, _, message: types.Message):
-                return message.id == id
-
-            return filters.create(func, "MessageFilter")
-
-        async def handler_func(client, message, future: asyncio.Future):
-            try:
-                future.set_result(message)
-            except asyncio.InvalidStateError:
-                pass
-
         future = asyncio.Future()
-        f = filter_message(message.id)
+        
+        async def handler(event):
+            if event.message.id == message.id:
+                try:
+                    future.set_result(event.message)
+                except asyncio.InvalidStateError:
+                    pass
+                    
+        builder = events.MessageEdited()
         if filter:
-            f = f & filter
-        handler = EditedMessageHandler(async_partial(handler_func, future=future), f)
-        await self.add_handler(handler, group=0)
+            original_filter = builder.filter
+            
+            async def combined_filter(event):
+                return await original_filter(event) and await filter(event)
+                
+            builder.filter = combined_filter
+            
+        self.add_event_handler(handler, builder)
         try:
             yield future
         finally:
-            await self.remove_handler(handler, group=0)
+            self.remove_event_handler(handler)
 
     async def wait_reply(
         self, chat_id: Union[int, str], send: str = None, timeout: float = 10, outgoing=False, filter=None
     ):
-        async with self.catch_reply(chat_id=chat_id, filter=filter) as f:
+        async with self.catch_reply(chat_id=chat_id, filter=filter, outgoing=outgoing) as f:
             if send:
                 await self.send_message(chat_id, send)
-            msg: types.Message = await asyncio.wait_for(f, timeout)
+            msg = await asyncio.wait_for(f, timeout)
             return msg
 
     async def wait_edit(
@@ -472,25 +436,30 @@ class Client(pyrogram.Client):
         async with self.catch_edit(message, filter=filter) as f:
             if click:
                 try:
-                    await message.click(click)
+                    if isinstance(click, str):
+                        await message.click(text=click)
+                    else:
+                        await message.click(data=click)
                 except TimeoutError:
                     if noanswer:
                         pass
                     else:
                         raise
-            msg: types.Message = await asyncio.wait_for(f, timeout)
+            msg = await asyncio.wait_for(f, timeout)
             return msg
 
     async def mute_chat(self, chat_id: Union[int, str], until: Union[int, datetime]):
         if isinstance(until, datetime):
-            until = until.timestamp()
+            until = int(until.timestamp())
 
-        return await self.invoke(
-            raw.functions.account.UpdateNotifySettings(
-                peer=raw.types.InputNotifyPeer(peer=await self.resolve_peer(chat_id)),
-                settings=raw.types.InputPeerNotifySettings(
+        return await self(
+            functions.account.UpdateNotifySettings(
+                peer=types.InputNotifyPeer(
+                    peer=await self.get_input_entity(chat_id)
+                ),
+                settings=types.InputPeerNotifySettings(
                     show_previews=False,
-                    mute_until=int(until),
+                    mute_until=until,
                 ),
             )
         )
@@ -498,14 +467,7 @@ class Client(pyrogram.Client):
     async def handle_updates(self, updates):
         self.last_update_time = datetime.now()
 
-        if isinstance(updates, (raw.types.Updates, raw.types.UpdatesCombined)):
-            is_min = any(
-                (
-                    await self.fetch_peers(updates.users),
-                    await self.fetch_peers(updates.chats),
-                )
-            )
-
+        if isinstance(updates, (types.Updates, types.UpdatesCombined)):
             users = {u.id: u for u in updates.users}
             chats = {c.id: c for c in updates.chats}
 
@@ -517,18 +479,19 @@ class Client(pyrogram.Client):
                 pts = getattr(update, "pts", None)
                 pts_count = getattr(update, "pts_count", None)
 
-                if isinstance(update, raw.types.UpdateNewChannelMessage) and is_min:
+                if isinstance(update, types.UpdateNewChannelMessage) and pts and pts_count:
                     message = update.message
 
-                    if not isinstance(message, raw.types.MessageEmpty):
+                    if not isinstance(message, types.MessageEmpty):
                         try:
-                            diff = await self.invoke(
-                                raw.functions.updates.GetChannelDifference(
-                                    channel=await self.resolve_peer(utils.get_channel_id(channel_id)),
-                                    filter=raw.types.ChannelMessagesFilter(
+                            diff = await self(
+                                functions.updates.GetChannelDifference(
+                                    channel=await self.get_input_entity(channel_id),
+                                    filter=types.ChannelMessagesFilter(
                                         ranges=[
-                                            raw.types.MessageRange(
-                                                min_id=update.message.id, max_id=update.message.id
+                                            types.MessageRange(
+                                                min_id=update.message.id,
+                                                max_id=update.message.id
                                             )
                                         ]
                                     ),
@@ -536,42 +499,42 @@ class Client(pyrogram.Client):
                                     limit=pts,
                                 )
                             )
-                        except RPCError:
+                        except Exception:
                             pass
-                        except ValueError:
-                            pass
-                        except OSError:
-                            logger.info("网络不稳定, 可能遗漏消息.")
                         else:
-                            if not isinstance(diff, raw.types.updates.ChannelDifferenceEmpty):
+                            if not isinstance(diff, types.updates.ChannelDifferenceEmpty):
                                 users.update({u.id: u for u in diff.users})
                                 chats.update({c.id: c for c in diff.chats})
 
                 self.dispatcher.updates_queue.put_nowait((update, users, chats))
-        elif isinstance(updates, (raw.types.UpdateShortMessage, raw.types.UpdateShortChatMessage)):
-            diff = await self.invoke(
-                raw.functions.updates.GetDifference(
-                    pts=updates.pts - updates.pts_count, date=updates.date, qts=-1
+        elif isinstance(updates, (types.UpdateShortMessage, types.UpdateShortChatMessage)):
+            diff = await self(
+                functions.updates.GetDifference(
+                    pts=updates.pts - updates.pts_count,
+                    date=updates.date,
+                    qts=-1
                 )
             )
 
             if diff.new_messages:
                 self.dispatcher.updates_queue.put_nowait(
                     (
-                        raw.types.UpdateNewMessage(
-                            message=diff.new_messages[0], pts=updates.pts, pts_count=updates.pts_count
+                        types.UpdateNewMessage(
+                            message=diff.new_messages[0],
+                            pts=updates.pts,
+                            pts_count=updates.pts_count
                         ),
                         {u.id: u for u in diff.users},
                         {c.id: c for c in diff.chats},
                     )
                 )
             else:
-                if diff.other_updates:  # The other_updates list can be empty
+                if diff.other_updates:
                     self.dispatcher.updates_queue.put_nowait((diff.other_updates[0], {}, {}))
-        elif isinstance(updates, raw.types.UpdateShort):
+        elif isinstance(updates, types.UpdateShort):
             self.dispatcher.updates_queue.put_nowait((updates.update, {}, {}))
-        elif isinstance(updates, raw.types.UpdatesTooLong):
-            await self.invoke(raw.functions.updates.GetState())
+        elif isinstance(updates, types.UpdatesTooLong):
+            await self(functions.updates.GetState())
             logger.warning(f"发生超长更新, 已尝试处理该更新, 部分消息可能遗漏.")
 
 
@@ -628,7 +591,7 @@ class ClientsSession:
             except TypeError:
                 return
             if not ref:
-                logger.debug(f'登出账号 "{client.phone_number}".')
+                logger.debug(f'出账号 "{client.phone_number}".')
                 await client.stop()
                 cls.pool.pop(phone, None)
 
@@ -695,7 +658,7 @@ class ClientsSession:
                     if resp.status == 204:
                         return True
                     else:
-                        logger.warning(f"检测网络状态时发生错误, 网络检测将被跳过.")
+                        logger.warning(f"检测网络状态发生错误, 网络检测将被跳过.")
                         return False
             except (ProxyConnectionError, ProxyTimeoutError) as e:
                 un = connector._proxy_username
@@ -732,7 +695,7 @@ class ClientsSession:
                 nowtime = datetime.now(timezone.utc).timestamp()
                 if abs(nowtime - api_timestamp) > 30:
                     logger.warning(
-                        f"您的系统时间设置不正确, 与世界时间差距过大, 可能会导致连接失败, 敬请注意. 程序将继续运行."
+                        f"您的系统时间设置不正确, 与世界时间差距过大, 可能会导致连接失败, 敬注意. 程序将继续运行."
                     )
             except Exception as e:
                 logger.warning(f"检测世界时间发生错误, 时间检测将被跳过.")
@@ -771,7 +734,7 @@ class ClientsSession:
                     )
                 else:
                     logger.debug(
-                        f'账号 "{account["phone"]}" 登录凭据不存在, 即将进入登录流程, 仅内存模式{"启用" if in_memory else "禁用"}.'
+                        f'账号 "{account["phone"]}" 登录凭据不存在, 即进入登录流程, 仅内存模式{"启用" if in_memory else "禁用"}.'
                     )
                 try:
                     client = Client(
@@ -787,7 +750,6 @@ class ClientsSession:
                         in_memory=in_memory,
                         proxy=proxy,
                         workdir=self.basedir,
-                        sleep_threshold=30,
                     )
                     try:
                         await asyncio.wait_for(client.start(), 120)
@@ -799,26 +761,26 @@ class ClientsSession:
                             logger.error(f"无法连接到 Telegram 服务器, 请检查您的网络.")
                             continue
                 except OperationalError as e:
-                    logger.warning(f"内部数据库错误, 正在重置, 您可能需要重新登录.")
+                    logger.warning(f"内部数据库误, 正在重置, 您可能需要重新登录.")
                     show_exception(e)
                     session_file.unlink(missing_ok=True)
-                except ApiIdPublishedFlood:
+                except ApiIdPublishedFloodError:
                     logger.warning(f'登录账号 "{account["phone"]}" 时发生 API key 限制, 将被跳过.')
                     break
-                except Unauthorized as e:
+                except UnauthorizedError:
                     if config_session_string:
                         logger.error(
-                            f'账号 "{account["phone"]}" 由于配置中提供的 session 已被注销, 将被跳过.'
+                            f'账号 "{account["phone"]}" 由于配置中提供的 session 被销, 将被跳过.'
                         )
                         show_exception(e)
                         break
                     elif file_session_string:
-                        logger.error(f'账号 "{account["phone"]}" 已被注销, 将在 3 秒后重新登录.')
+                        logger.error(f'账号 "{account["phone"]}" 已被��销, 将在 3 秒后重新登录.')
                         show_exception(e)
                         session_string_file.unlink(missing_ok=True)
                         continue
                     elif client.in_memory:
-                        logger.error(f'账号 "{account["phone"]}" 已被注销, 将在 3 秒后重新登录.')
+                        logger.error(f'账号 "{account["phone"]}" 被注销, 将在 3 秒后重新登录.')
                         show_exception(e)
                         continue
                     else:
@@ -840,13 +802,13 @@ class ClientsSession:
             raise
         except binascii.Error:
             logger.error(
-                f'登录账号 "{account["phone"]}" 失败, 由于您在配置文件中提供的 session 无效, 将被跳过.'
+                f'登录账号 "{account["phone"]}" 失败, 由于您在��置文件中提供的 session 无效, 将被跳过.'
             )
         except RPCError as e:
             logger.error(f'登录账号 "{account["phone"]}" 失败 ({e.MESSAGE.format(value=e.value)}), 将被跳过.')
             return None
-        except BadMsgNotification as e:
-            if "synchronized" in str(e):
+        except Exception as e:
+            if "bad message" in str(e).lower() and "synchronized" in str(e).lower():
                 logger.error(
                     f'登录账号 "{account["phone"]}" 时发生异常, 可能是因为您的系统时间与世界时间差距过大, 将被跳过.'
                 )
@@ -855,10 +817,6 @@ class ClientsSession:
                 logger.error(f'登录账号 "{account["phone"]}" 时发生异常, 将被跳过.')
                 show_exception(e, regular=False)
                 return None
-        except Exception as e:
-            logger.error(f'登录账号 "{account["phone"]}" 时发生异常, 将被跳过.')
-            show_exception(e, regular=False)
-            return None
         else:
             if not session_string_file.exists():
                 with open(session_string_file, "w+", encoding="utf-8") as f:

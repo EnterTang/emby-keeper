@@ -1,4 +1,5 @@
-from pyrogram.types import Message
+from telethon.tl.custom import Message
+from telethon import Button
 
 from embykeeper.utils import to_iterable
 
@@ -18,22 +19,23 @@ class TanhuaCheckin(BotCheckin):
         if (
             text
             and any(keyword in text for keyword in to_iterable(self.templ_panel_keywords))
-            and message.reply_markup
+            and message.buttons
         ):
-            keys = [k.text for r in message.reply_markup.inline_keyboard for k in r]
-            for k in keys:
-                if "个人信息" in k:
-                    try:
-                        await message.click(k)
-                    except TimeoutError:
-                        pass
-                    return
-                if "签到" in k or "簽到" in k:
-                    try:
-                        await message.click(k)
-                    except TimeoutError:
-                        self.log.debug(f"点击签到按钮无响应, 可能按钮未正确处理点击回复. 一般来说不影响签到.")
-                    return
+            buttons = [b for row in message.buttons for b in row]
+            for button in buttons:
+                if isinstance(button, Button.Inline):
+                    if "个人信息" in button.text:
+                        try:
+                            await message.click(data=button.data)
+                        except TimeoutError:
+                            pass
+                        return
+                    if "签到" in button.text or "簽到" in button.text:
+                        try:
+                            await message.click(data=button.data)
+                        except TimeoutError:
+                            self.log.debug(f"点击签到按钮无响应, 可能按钮未正确处理点击回复. 一般来说不影响签到.")
+                        return
             else:
                 self.log.warning(f"签到失败: 账户错误.")
                 return await self.fail()

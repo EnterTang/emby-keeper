@@ -1,7 +1,6 @@
 import random
-from pyrogram.types import Message, InlineKeyboardMarkup
-from pyrogram.errors import RPCError
-from pyrogram.enums import MessageEntityType
+from telethon.tl.types import Message, MessageEntityMentionName, KeyboardButtonCallback
+from telethon.errors import RPCError
 
 from ...utils import flatten
 from ..lock import pornemby_alert
@@ -22,23 +21,23 @@ class PornembyDragonRainMonitor:
             if pornemby_alert.get(self.client.me.id, False):
                 self.log.info(f"由于风险急停不抢红包.")
                 return
-            if message.reply_markup:
-                if isinstance(message.reply_markup, InlineKeyboardMarkup):
-                    buttons = flatten(message.reply_markup.inline_keyboard)
-                    for b in buttons:
-                        if "红包奖励" in b.text:
-                            if random.random() > self.config.get("possibility", 1.0):
-                                self.log.info(f"由于概率设置不抢红包.")
-                                return
-                            try:
-                                await message.click(b.text)
-                            except TimeoutError:
-                                self.log.info("检测到 Pornemby 抢红包雨, 已点击抢红包, 等待结果.")
-                            except RPCError:
-                                self.log.info("检测到 Pornemby 抢红包雨, 但没有抢到红包.")
-                            else:
-                                self.log.info("检测到 Pornemby 抢红包雨, 已点击抢红包, 等待结果.")
+            buttons = await message.get_buttons()
+            if buttons:
+                buttons = flatten(buttons)
+                for button in buttons:
+                    if isinstance(button, KeyboardButtonCallback) and "红包奖励" in button.text:
+                        if random.random() > self.config.get("possibility", 1.0):
+                            self.log.info(f"由于概率设置不抢红包.")
                             return
+                        try:
+                            await button.click()
+                        except TimeoutError:
+                            self.log.info("检测到 Pornemby 抢红包雨, 已点击抢红包, 等待结果.")
+                        except RPCError:
+                            self.log.info("检测到 Pornemby 抢红包雨, 但没有抢到红包.")
+                        else:
+                            self.log.info("检测到 Pornemby 抢红包雨, 已点击抢红包, 等待结果.")
+                        return
 
     class PornembyDragonRainStatusMonitor(Monitor):
         name = "Pornemby 红包雨结果"
@@ -49,6 +48,6 @@ class PornembyDragonRainMonitor:
 
         async def on_trigger(self, message: Message, key, reply):
             for me in message.entities:
-                if me.type == MessageEntityType.TEXT_MENTION:
-                    if me.user.id == self.client.me.id:
+                if isinstance(me, MessageEntityMentionName):
+                    if me.user_id == self.client.me.id:
                         self.log.info(f"红包雨结果: 恭喜获得 {key[1]} 豆.")

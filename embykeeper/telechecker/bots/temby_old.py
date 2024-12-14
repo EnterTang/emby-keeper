@@ -1,4 +1,5 @@
-from pyrogram.types import Message
+from telethon.tl.types import Message
+from telethon import Button
 
 from ._base import AnswerBotCheckin
 
@@ -14,14 +15,15 @@ class TembyCheckin(AnswerBotCheckin):
 
     async def on_answer(self, message: Message):
         await super().on_answer(message)
-        keys = [k.text for r in message.reply_markup.inline_keyboard for k in r]
-        if len(keys) == 1:
-            await message.click(k)
-        else:
-            for k in keys:
-                if "签到" in k:
-                    await message.click(k)
-                    return
+        if message.buttons:
+            buttons = [b for row in message.buttons for b in row]
+            if len(buttons) == 1:
+                await message.click(data=buttons[0].data)
             else:
-                self.log.warning(f"签到失败: 账户错误.")
-                return await self.fail()
+                for button in buttons:
+                    if isinstance(button, Button.Inline) and "签到" in button.text:
+                        await message.click(data=button.data)
+                        return
+                else:
+                    self.log.warning(f"签到失败: 账户错误.")
+                    return await self.fail()

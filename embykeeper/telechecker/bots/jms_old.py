@@ -1,7 +1,7 @@
 import asyncio
 import random
 
-from pyrogram.types import Message
+from telethon.tl.types import Message
 from thefuzz import process
 
 from ...data import get_data

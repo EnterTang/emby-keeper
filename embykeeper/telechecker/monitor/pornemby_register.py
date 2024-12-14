@@ -1,5 +1,5 @@
-from pyrogram.types import Message
-from pyrogram.errors import RPCError
+from telethon.tl.types import Message
+from telethon.errors import RPCError
 
 from ..lock import pornemby_alert
 from ._base import Monitor

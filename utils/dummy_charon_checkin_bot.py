@@ -4,10 +4,8 @@ from textwrap import dedent
 
 from loguru import logger
 import tomli as tomllib
-from pyrogram import filters
-from pyrogram.handlers import MessageHandler
-from pyrogram.types import Message
-from pyrogram.enums import ParseMode
+from telethon import events
+from telethon.tl.types import Message
 
 from embykeeper.utils import AsyncTyper
 from embykeeper.telechecker.tele import Client, API_KEY
@@ -24,9 +22,9 @@ async def dump(client: Client, message: Message):
 async def checkin(client: Client, message: Message):
     url = app_config["url"]
     await client.send_message(
-        message.chat.id,
+        message.chat_id,
         f"请打开并复制网页的内容, 粘贴回复: [{url}]({url})",
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode='md',
     )
 
 
@@ -48,8 +46,8 @@ async def main(config: Path, url: str):
         in_memory=True,
     )
     async with bot:
-        await bot.add_handler(MessageHandler(dump), group=1)
-        await bot.add_handler(MessageHandler(checkin, filters.command("checkin")))
+        await bot.add_handler(events.NewMessage()(dump), group=1)
+        await bot.add_handler(events.NewMessage(pattern="/checkin")(checkin))
         logger.info(f"Started listening for commands: @{bot.me.username}.")
         await asyncio.Event().wait()
 

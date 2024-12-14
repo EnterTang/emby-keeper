@@ -6,17 +6,9 @@ from typing import Dict, List
 
 from loguru import logger
 import tomli as tomllib
-from pyrogram import filters
-from pyrogram.handlers import MessageHandler, CallbackQueryHandler
-from pyrogram.types import (
-    Message,
-    BotCommand,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    MessageEntity,
-    CallbackQuery,
-)
-from pyrogram.enums import ParseMode, MessageEntityType
+from telethon import events, Button
+from telethon.tl.types import Message, User, MessageEntityType
+from telethon.tl.custom import InlineKeyboardMarkup
 
 from embykeeper.utils import AsyncTyper
 from embykeeper.telechecker.tele import Client, API_KEY
@@ -26,7 +18,7 @@ user_states = {}
 app = AsyncTyper()
 
 
-async def callback(client: Client, callback_query: CallbackQuery):
+async def callback(client: Client, callback_query):
     print(f"收到 Callback 信息: {callback_query.data}")
     await callback_query.answer()
 
@@ -53,10 +45,10 @@ async def parse(client: Client, message: Message, updates: List[Dict]):
                     _row = []
                     for key in row:
                         _row.append(
-                            InlineKeyboardButton(
+                            Button.text(
                                 key["text"],
-                                callback_data=key.get("callback_data", None),
-                                url=key.get("url", None),
+                                key.get("callback_data", None),
+                                key.get("url", None),
                             )
                         )
                     _reply_markup.append(_row)

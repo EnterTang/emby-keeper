@@ -1,7 +1,8 @@
 import asyncio
 import random
 
-from pyrogram.types import Message
+from telethon import types, events
+from telethon.tl.custom import Message
 
 from ...utils import async_partial
 from ..lock import misty_monitors, misty_locks
@@ -32,17 +33,21 @@ class MistyCheckin(BotCheckin):
                 if retry:
                     await asyncio.sleep(random.uniform(2, 4))
                     msg = await wr("🛎每日签到")
-                    if any(w in (msg.text or msg.caption) for w in ("上次签到", "验证码")):
+                    msg_content = msg.text or msg.caption or ""
+                    if any(w in msg_content for w in ("上次签到", "验证码")):
                         break
                 else:
                     msg: Message = await wr("/cancel")
-                    if "选择您要使用的功能" in (msg.caption or msg.text):
+                    msg_content = msg.caption or msg.text or ""
+                    if "选择您要使用的功能" in msg_content:
                         await asyncio.sleep(random.uniform(2, 4))
                         msg = await wr("🎲更多功能")
-                    if "请选择功能" in (msg.text or msg.caption):
+                    msg_content = msg.text or msg.caption or ""
+                    if "请选择功能" in msg_content:
                         await asyncio.sleep(random.uniform(2, 4))
                         msg = await wr("🛎每日签到")
-                        if "获取账号失败" in (msg.text or msg.caption):
+                        msg_content = msg.text or msg.caption or ""
+                        if "获取账号失败" in msg_content:
                             self.log.warning(f"签到失败: 未注册账号.")
                             return await self.fail()
                         else:

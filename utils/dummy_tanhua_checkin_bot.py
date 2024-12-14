@@ -5,16 +5,9 @@ from textwrap import dedent
 
 from loguru import logger
 import tomli as tomllib
-from pyrogram import filters
-from pyrogram.handlers import MessageHandler, CallbackQueryHandler
-from pyrogram.types import (
-    Message,
-    BotCommand,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    CallbackQuery,
-)
-from pyrogram.enums import ParseMode
+from telethon import events, Button
+from telethon.tl.types import Message, User
+from telethon.tl.custom import InlineKeyboardMarkup
 
 from embykeeper.utils import AsyncTyper
 from embykeeper.telechecker.tele import Client, API_KEY
@@ -25,32 +18,28 @@ states = {}
 signed = {}
 
 main_photo = Path(__file__).parent / "data/main.png"
-main_reply_markup = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(text="️👥个人信息", callback_data="info 1000000000"),
-            InlineKeyboardButton(text="🌐线路信息", callback_data="line 1000000000"),
-            InlineKeyboardButton(text="😵重置密码", callback_data="reset 1000000000"),
-        ],
-        [
-            InlineKeyboardButton(text="🫣隐藏部分分类(当前: 关)", callback_data="hide 1000000000"),
-        ],
-    ]
-)
+main_reply_markup = InlineKeyboardMarkup([
+    [
+        Button.inline("️👥个人信息", data="info 1000000000"),
+        Button.inline("🌐线路信息", data="line 1000000000"),
+        Button.inline("😵重置密码", data="reset 1000000000"),
+    ],
+    [
+        Button.inline("🫣隐藏部分分类(当前: 关)", data="hide 1000000000"),
+    ],
+])
 
-info_reply_markup = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🎊签到", callback_data="checkin 1000000000"),
-            InlineKeyboardButton(text="🏠返回主菜单", callback_data="main 1000000000"),
-        ],
-    ]
-)
+info_reply_markup = InlineKeyboardMarkup([
+    [
+        Button.inline("🎊签到", data="checkin 1000000000"),
+        Button.inline("🏠返回主菜单", data="main 1000000000"),
+    ],
+])
 
 result_reply_markup = InlineKeyboardMarkup(
     inline_keyboard=[
         [
-            InlineKeyboardButton(text="🏠返回主菜单", callback_data="main 1000000000"),
+            Button.inline("🏠返回主菜单", data="main 1000000000"),
         ],
     ]
 )

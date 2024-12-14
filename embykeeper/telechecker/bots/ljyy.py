@@ -1,6 +1,7 @@
 import asyncio
 
-from pyrogram.types import Message
+from telethon.tl.custom import Message
+from telethon import Button
 from thefuzz import fuzz
 
 from ._base import AnswerBotCheckin
@@ -20,13 +21,13 @@ class LJYYCheckin(AnswerBotCheckin):
     additional_auth = ["prime"]
 
     async def message_handler(self, client, message: Message):
-        if message.text and "请选择操作项" in message.text and message.reply_markup:
-            keys = [k.text for r in message.reply_markup.inline_keyboard for k in r]
-            for k in keys:
-                if "签到" in k:
+        if message.text and "请选择操作项" in message.text and message.buttons:
+            buttons = [b for row in message.buttons for b in row]
+            for button in buttons:
+                if isinstance(button, Button.Inline) and "签到" in button.text:
                     async with self.client.catch_reply(self.bot_username) as f:
                         try:
-                            await message.click(k)
+                            await message.click(data=button.data)
                         except TimeoutError:
                             pass
                         try:
@@ -46,4 +47,4 @@ class LJYYCheckin(AnswerBotCheckin):
             match = [(k, fuzz.ratio(k, captcha)) for k in self.get_keys(self.message)]
             max_k, max_r = max(match, key=lambda x: x[1])
             self.log.info(f"识别字符: {captcha}, 选择字符: {max_k}")
-            await self.message.click(max_k)
+            await self.message.click(text=max_k)

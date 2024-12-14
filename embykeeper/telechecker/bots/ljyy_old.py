@@ -1,5 +1,5 @@
-from pyrogram.types import Message
-from pyrogram.errors import RPCError
+from telethon.tl.types import Message
+from telethon.errors import RPCError
 from thefuzz import fuzz
 
 from ._base import AnswerBotCheckin
@@ -28,6 +28,11 @@ class LJYYCheckin(AnswerBotCheckin):
         async with self.operable:
             if not self.message:
                 await self.operable.wait()
-            match = [(k, fuzz.ratio(k, captcha)) for k in self.get_keys(self.message)]
-            max_k, max_r = max(match, key=lambda x: x[1])
-            await self.message.click(max_k)
+            if message.buttons:
+                buttons = [b for row in message.buttons for b in row]
+                match = [(b.text, fuzz.ratio(b.text, captcha)) for b in buttons]
+                max_button, max_ratio = max(match, key=lambda x: x[1])
+                for button in buttons:
+                    if button.text == max_button:
+                        await message.click(data=button.data)
+                        break

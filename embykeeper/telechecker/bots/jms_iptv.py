@@ -1,4 +1,4 @@
-from pyrogram.types import Message
+from telethon.tl.custom import Message
 
 from ._base import AnswerBotCheckin
 

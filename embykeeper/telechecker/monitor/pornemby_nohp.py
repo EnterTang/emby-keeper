@@ -1,8 +1,7 @@
 import asyncio
 from datetime import datetime
 
-from pyrogram.types import Message
-from pyrogram.enums import MessageEntityType
+from telethon.tl.types import Message, MessageEntityMentionName
 
 from ..lock import pornemby_nohp, pornemby_messager_enabled
 
@@ -19,8 +18,8 @@ class PornembyNoHPMonitor(Monitor):
 
     async def on_trigger(self, message: Message, key, reply):
         for me in message.entities:
-            if me.type == MessageEntityType.TEXT_MENTION:
-                if me.user.id == self.client.me.id:
+            if isinstance(me, MessageEntityMentionName):
+                if me.user_id == self.client.me.id:
                     pornemby_nohp[self.client.me.id] = datetime.today().date()
                     self.log.info("检测到 Pornemby 血量耗尽, 已停止今日水群.")
 

@@ -1,6 +1,6 @@
 import asyncio
-from pyrogram.types import Message
-from pyrogram import filters
+from telethon.tl.types import Message
+from telethon import Button
 
 from embykeeper.utils import async_partial
 
@@ -20,29 +20,24 @@ class ShufuMonitor(Monitor):
         for _ in range(3):
             try:
                 msg = await wr("/start")
-                if "请确认好重试" in (msg.text or msg.caption):
+                if "请确认好重试" in (msg.text or msg.raw_text):
                     continue
-                elif "欢迎进入用户面板" in (msg.text or msg.caption) and msg.reply_markup:
-                    keys = [k.text for r in msg.reply_markup.inline_keyboard for k in r]
+                elif "欢迎进入用户面板" in (msg.text or msg.raw_text) and msg.buttons:
+                    keys = [k.text for row in msg.buttons for k in row]
                     for k in keys:
                         if "使用注册码" in k:
-                            async with self.client.catch_reply(
-                                self.bot_username, filter=filters.regex(".*对我发送.*")
-                            ) as f:
+                            async with self.client.conversation(self.bot_username) as conv:
                                 try:
-                                    await msg.click(k)
-                                except TimeoutError:
-                                    pass
-                                try:
-                                    await asyncio.wait_for(f, 10)
+                                    await msg.click(text=k)
+                                    response = await conv.wait_event(pattern=r".*对我发送.*", timeout=10)
+                                    if response:
+                                        break
                                 except asyncio.TimeoutError:
                                     continue
-                                else:
-                                    break
                     else:
                         continue
                     msg = await wr(key)
-                    if "注册码已被使用" in (msg.text or msg.caption):
+                    if "注册码已被使用" in (msg.text or msg.raw_text):
                         self.log.info(f'已向 Bot @{self.bot_username} 发送了邀请码: "{key}", 但是已被抢注了.')
                     else:
                         self.log.bind(msg=True).info(

@@ -13,6 +13,7 @@ python-dateutil
 ddddocr>=1.5.5
 embypyfix
 pyrogram
+telethon
 tgcrypto
 pillow>10.0.0
 thefuzz[speedup]

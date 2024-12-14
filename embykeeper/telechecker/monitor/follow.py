@@ -1,9 +1,8 @@
 import asyncio
 
-from pyrogram import Client
-from pyrogram.enums import ChatType
-from pyrogram.types import Message
-from pyrogram.errors import RPCError
+from telethon import TelegramClient
+from telethon.tl.types import Message, Chat, User
+from telethon.errors import RPCError
 from cachetools import TTLCache
 
 from ._base import Monitor
@@ -24,18 +23,18 @@ class FollowMonitor(Monitor):
             self.log.error(f"发生错误, 不再监视: {self.name}.")
             return False
 
-    async def message_handler(self, client: Client, message: Message):
+    async def message_handler(self, client: TelegramClient, message: Message):
         if not message.text:
             return
-        if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        if not isinstance(message.chat, (Chat)):
             return
         if len(message.text) > 50:
             return
         if message.text.startswith("/"):
             return
-        if not message.from_user:
+        if not isinstance(message.sender, User):
             return
-        if message.from_user.is_bot:
+        if message.sender.bot:
             return
         ident = (message.chat.id, message.text)
         async with self.lock:

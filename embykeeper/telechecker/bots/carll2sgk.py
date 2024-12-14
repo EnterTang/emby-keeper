@@ -1,6 +1,6 @@
 from ._base import BotCheckin
-
-from pyrogram.types import Message
+from telethon.tl.custom import Message
+from telethon import Button
 
 __ignore__ = True
 
@@ -12,12 +12,12 @@ class Carll2SGKCheckin(BotCheckin):
     additional_auth = ["prime"]
 
     async def message_handler(self, client, message: Message):
-        if message.caption and "欢迎使用" in message.caption and message.reply_markup:
-            keys = [k.text for r in message.reply_markup.inline_keyboard for k in r]
-            for k in keys:
-                if "签到" in k:
+        if message.caption and "欢迎使用" in message.caption and message.buttons:
+            buttons = [b for row in message.buttons for b in row]
+            for button in buttons:
+                if isinstance(button, Button.Inline) and "签到" in button.text:
                     try:
-                        await message.click(k)
+                        await message.click(data=button.data)
                     except TimeoutError:
                         pass
                     return

@@ -6,9 +6,8 @@ import string
 
 from loguru import logger
 import tomli as tomllib
-from pyrogram import filters
-from pyrogram.handlers import MessageHandler
-from pyrogram.types import Message, BotCommand
+from telethon import events
+from telethon.tl.types import Message, User
 from captcha.image import ImageCaptcha
 
 from embykeeper.utils import AsyncTyper
@@ -25,15 +24,15 @@ async def dump(client: Client, message: Message):
 
 
 async def start(client: Client, message: Message):
-    await client.send_message(message.from_user.id, "你好! 请使用命令进行签到测试!")
+    await client.send_message(message.sender_id, "你好! 请使用命令进行签到测试!")
 
 
 async def check_captcha(client: Client, message: Message):
-    if message.from_user.id not in user_states:
+    if message.sender_id not in user_states:
         await message.reply("未知输入")
     else:
-        if user_states[message.from_user.id].lower() == message.text.lower():
-            del user_states[message.from_user.id]
+        if user_states[message.sender_id].lower() == message.text.lower():
+            del user_states[message.sender_id]
             await message.reply("成功")
         else:
             await message.reply("失败")
@@ -41,10 +40,10 @@ async def check_captcha(client: Client, message: Message):
 
 async def send_captcha(client: Client, message: Message):
     code = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(3))
-    user_states[message.from_user.id] = code
+    user_states[message.sender_id] = code
     stream = BytesIO()
     ImageCaptcha().write(code, stream)
-    await client.send_photo(message.from_user.id, stream)
+    await client.send_file(message.sender_id, stream)
 
 
 @app.async_command()

@@ -2,7 +2,7 @@ import asyncio
 import random
 import string
 
-from pyrogram.types import Message
+from telethon.tl.types import Message
 from PIL import Image
 
 from ...utils import async_partial, nonblocking

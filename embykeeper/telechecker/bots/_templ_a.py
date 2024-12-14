@@ -1,5 +1,5 @@
-from pyrogram.types import Message
-from pyrogram.raw.types.messages import BotCallbackAnswer
+from telethon.tl.custom import Message
+from telethon.tl.types import UpdateBotCallbackQuery
 
 from embykeeper.utils import to_iterable
 
@@ -21,17 +21,21 @@ class TemplateACheckin(BotCheckin):
             and any(keyword in text for keyword in to_iterable(self.templ_panel_keywords))
             and message.reply_markup
         ):
-            keys = [k.text for r in message.reply_markup.inline_keyboard for k in r]
+            keys = [k.text for r in message.reply_markup.rows for k in r.buttons]
             for k in keys:
                 if "签到" in k or "簽到" in k:
                     try:
-                        answer: BotCallbackAnswer = await message.click(k)
+                        result = await message.click(text=k)
+                        if isinstance(result, Message):
+                            answer = result.message
+                        else:
+                            answer = None
                     except TimeoutError:
                         self.log.debug(f"点击签到按钮无响应, 可能按钮未正确处理点击回复. 一般来说不影响签到.")
                     else:
-                        if self.use_button_answer:
-                            if not any(ignore in answer.message for ignore in self.bot_text_ignore_answer):
-                                await self.on_text(Message(id=0, text=answer.message), answer.message)
+                        if self.use_button_answer and answer:
+                            if not any(ignore in answer for ignore in self.bot_text_ignore_answer):
+                                await self.on_text(Message(id=0), answer)
                     return
             else:
                 self.log.warning(f"签到失败: 账户错误.")

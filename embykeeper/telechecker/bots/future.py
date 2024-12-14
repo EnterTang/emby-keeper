@@ -4,8 +4,8 @@ import random
 import re
 from urllib.parse import parse_qs, urlparse
 
-from pyrogram.types import Message
-from pyrogram.raw.functions.messages import RequestWebView
+from telethon.tl.custom import Message
+from telethon import Button, functions
 from aiohttp import ClientSession, TCPConnector
 from aiohttp_socks import ProxyConnector, ProxyTimeoutError, ProxyError, ProxyType
 from faker import Faker
@@ -38,7 +38,6 @@ class FutureCheckin(BotCheckin):
     async def get_history_message(self, limit=0):
         """处理 limit 条历史消息, 并检测是否有验证."""
         try:
-            m: Message
             async for m in self.client.get_chat_history(self.chat_name or self.bot_username, limit=limit):
                 if m.text and "點擊下方按鈕並驗證您的身份" in m.text:
                     time_match = re.search(r"當前時間:(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", m.text)
@@ -68,17 +67,22 @@ class FutureCheckin(BotCheckin):
             self.log.warning(f"签到失败: 验证码解析异常, 之前有未完成的验证.")
             return await self.fail()
 
-        if message.text and "驗證您的身份" in message.text and message.reply_markup:
-            keys = [b for r in message.reply_markup.inline_keyboard for b in r]
-            for b in keys:
-                if "Verify" in b.text and b.web_app:
-                    url = b.web_app.url
+        if message.text and "驗證您的身份" in message.text and message.buttons:
+            buttons = [b for row in message.buttons for b in row]
+            for button in buttons:
+                if isinstance(button, Button.Url) and "Verify" in button.text and hasattr(button, 'url'):
+                    url = button.url
                     bot_peer = await self.client.resolve_peer(self.bot_username)
-                    url_auth = (
-                        await self.client.invoke(
-                            RequestWebView(peer=bot_peer, bot=bot_peer, platform="ios", url=url)
+                    result = await self.client._client(
+                        functions.messages.RequestAppWebViewRequest(
+                            peer=bot_peer,
+                            platform="ios",
+                            start_param=None,
+                            theme_params=None,
+                            url=url
                         )
-                    ).url
+                    )
+                    url_auth = result.url
                     if not await self.solve_captcha(url_auth):
                         self.log.error("签到失败: 验证码解析失败, 正在重试.")
                         await asyncio.sleep(self.bot_retry_wait)
@@ -95,13 +99,13 @@ class FutureCheckin(BotCheckin):
         if (
             message.caption
             and ("開始回響" in message.caption or "開始操作" in message.caption)
-            and message.reply_markup
+            and message.buttons
         ):
-            keys = [k.text for r in message.reply_markup.inline_keyboard for k in r]
-            for k in keys:
-                if any([i in k for i in self.click_button]):
+            buttons = [b for row in message.buttons for b in row]
+            for button in buttons:
+                if isinstance(button, Button.Inline) and any(i in button.text for i in self.click_button):
                     try:
-                        await message.click(k)
+                        await message.click(data=button.data)
                     except TimeoutError:
                         pass
                     return

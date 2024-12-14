@@ -6,17 +6,10 @@ import string
 
 from loguru import logger
 import tomli as tomllib
-from pyrogram import filters
-from pyrogram.handlers import MessageHandler, CallbackQueryHandler
-from pyrogram.types import (
-    Message,
-    BotCommand,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-    CallbackQuery,
-)
+from telethon import events, Button
+from telethon.tl.types import Message, User
+from telethon.tl.custom import InlineKeyboardMarkup
+from telethon.tl.custom.button import KeyboardButtonCallback
 
 from embykeeper.utils import AsyncTyper
 from embykeeper.telechecker.tele import Client, API_KEY
@@ -32,12 +25,12 @@ async def dump(client: Client, message: Message):
 
 
 async def start(client: Client, message: Message):
-    await client.send_message(message.from_user.id, "你好! 请使用 /exam 命令开始考试!")
+    await client.send_message(message.sender_id, "你好! 请使用 /exam 命令开始考试!")
 
 
 async def exam(client: Client, message: Message):
     global questions
-    user_id = message.from_user.id
+    user_id = message.sender_id
 
     # Initialize user state
     user_states[user_id] = {"waiting_for_exam_choice": True}
@@ -46,12 +39,12 @@ async def exam(client: Client, message: Message):
     initial_message = (
         "通过考核才能注册 Emby 公益服账号或继续使用账号，是否开始考核？ ( 本次考核需要消耗 40 积分 )"
     )
-    keyboard = ReplyKeyboardMarkup([["✅ 开始", "🚫 放弃"]], resize_keyboard=True, one_time_keyboard=True)
-    await client.send_message(user_id, initial_message, reply_markup=keyboard)
+    keyboard = [[Button.text("✅ 开始"), Button.text("🚫 放弃")]]
+    await client.send_message(user_id, initial_message, buttons=keyboard)
 
 
 async def handle_exam_choice(client: Client, message: Message):
-    user_id = message.from_user.id
+    user_id = message.sender_id
 
     if user_id not in user_states or not user_states[user_id].get("waiting_for_exam_choice"):
         await client.send_message(user_id, "请先使用 /exam 命令开始考试。")
@@ -65,7 +58,7 @@ async def handle_exam_choice(client: Client, message: Message):
             "考核开始，限时 20 分钟，90 分及格，你可以随时使用 /cancel 命令放弃考核，"
             "但每次考核间隔需大于 72 个小时 ( 如果选项按钮显示不全，请把手机横过来或使用电脑作答 )"
         )
-        await client.send_message(user_id, start_message, reply_markup=ReplyKeyboardRemove())
+        await client.send_message(user_id, start_message, buttons=None)
 
         # Initialize user state and start the exam
         user_states[user_id].update(
@@ -73,10 +66,10 @@ async def handle_exam_choice(client: Client, message: Message):
         )
         await send_question(client, user_id)
     elif choice == "🚫 放弃":
-        await client.send_message(user_id, "考核已取消。", reply_markup=ReplyKeyboardRemove())
+        await client.send_message(user_id, "考核已取消。", buttons=None)
         del user_states[user_id]
     else:
-        await client.send_message(user_id, "无效的选择，请重新开始考核。", reply_markup=ReplyKeyboardRemove())
+        await client.send_message(user_id, "无效的选择，请重新开始考核。", buttons=None)
         del user_states[user_id]
 
 
@@ -100,7 +93,7 @@ async def send_question(client: Client, user_id):
     # Store the mapping of IDs to choices for later verification
     state["current_choices"] = {id: option for id, option in choices}
 
-    keyboard = [[InlineKeyboardButton(option, callback_data=f"exam-{id}")] for id, option in choices]
+    keyboard = [[Button.text(option, callback_data=f"exam-{id}")] for id, option in choices]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     text = f"{question['question']}\n\n本题贡献者: @测试题库\n\n进度: {state['current_question'] + 1}/{len(questions)}  |  当前分数: {state['score']}"

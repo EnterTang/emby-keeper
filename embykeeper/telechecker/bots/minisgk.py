@@ -1,7 +1,6 @@
 from ._base import BotCheckin
-
-from pyrogram.types import Message
-from pyrogram.raw.types.messages import BotCallbackAnswer
+from telethon.tl.custom import Message
+from telethon import Button, types
 
 __ignore__ = True
 
@@ -13,12 +12,13 @@ class MiniSGKCheckin(BotCheckin):
     additional_auth = ["prime"]
 
     async def message_handler(self, client, message: Message):
-        if message.reply_markup and message.reply_markup.inline_keyboard:
-            keys = [k.text for r in message.reply_markup.inline_keyboard for k in r]
-            for k in keys:
-                if "签到" in k:
-                    answer: BotCallbackAnswer = await message.click(k)
-                    await self.on_text(Message(id=0), answer.message)
+        if message.buttons:
+            buttons = [b for row in message.buttons for b in row]
+            for button in buttons:
+                if isinstance(button, Button.Inline) and "签到" in button.text:
+                    result = await message.click(data=button.data)
+                    if isinstance(result, types.UpdateBotCallbackQuery):
+                        await self.on_text(Message(id=0), result.message)
                     return
             else:
                 self.log.warning(f"签到失败: 账户错误.")

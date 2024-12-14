@@ -1,6 +1,7 @@
 import emoji
-from pyrogram.types import Message
-from pyrogram.errors import RPCError
+from telethon.tl.custom import Message
+from telethon import Button
+from telethon.errors import RPCError
 
 from ..link import Link
 from ._base import AnswerBotCheckin
@@ -18,15 +19,15 @@ class TerminusCheckin(AnswerBotCheckin):
 
     async def on_photo(self, message: Message):
         """分析分析传入的验证码图片并返回验证码."""
-        if message.reply_markup:
+        if message.buttons:
             clean = lambda o: emoji.replace_emoji(o, "").replace(" ", "")
-            keys = [k for r in message.reply_markup.inline_keyboard for k in r]
-            options = [k.text for k in keys]
+            buttons = [b for row in message.buttons for b in row]
+            options = [b.text for b in buttons if isinstance(b, Button.Inline)]
             options_cleaned = [clean(o) for o in options]
             if len(options) < 2:
                 return
             for i in range(3):
-                result, by = await Link(self.client).visual(message.photo.file_id, options_cleaned)
+                result, by = await Link(self.client).visual(message.photo.id, options_cleaned)
                 if result:
                     self.log.debug(f"已通过远端 ({by}) 解析答案: {result}.")
                     break
@@ -37,6 +38,6 @@ class TerminusCheckin(AnswerBotCheckin):
                 return await self.fail()
             result = options[options_cleaned.index(result)]
             try:
-                await message.click(result)
+                await message.click(text=result)
             except RPCError:
                 self.log.warning("按钮点击失败.")
